@@ -4,23 +4,18 @@
 
     <parent>
         <groupId>io.kaoto.forage</groupId>
-        <artifactId>forage</artifactId>
+        <artifactId>library</artifactId>
         <version>1.2-SNAPSHOT</version>
     </parent>
 
-    <artifactId>library</artifactId>
+    <artifactId>disaster-recovery</artifactId>
     <packaging>pom</packaging>
-    <name>Forage :: Library</name>
+    <name>Forage :: Library :: Disaster Recovery</name>
 
     <modules>
-        <module>ai</module>
-        <module>cloud</module>
-        <module>common</module>
-        <module>disaster-recovery</module>
-        <module>jdbc</module>
-        <module>jms</module>
-        <module>policy</module>
-        <module>vertx</module>
+        <module>forage-dr-core</module>
+        <module>forage-dr-engine</module>
+        <module>forage-dr-store-jdbc</module>
     </modules>
 
 </project>
