@@ -21,6 +21,10 @@
             <groupId>org.apache.camel</groupId>
             <artifactId>camel-api</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.apache.camel</groupId>
+            <artifactId>camel-support</artifactId>
+        </dependency>
 
         <!-- Test dependencies -->
         <dependency>
@@ -33,6 +37,11 @@
             <groupId>org.assertj</groupId>
             <artifactId>assertj-core</artifactId>
             <version>${assertj-core.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.camel</groupId>
+            <artifactId>camel-core</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>
