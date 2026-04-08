@@ -1,0 +1,46 @@
+# Disaster Recovery Manual Test Route
+#
+# A simple timer-driven route that processes messages through multiple steps.
+# With DR enabled, you should see:
+#   - Schema auto-creation on startup
+#   - Checkpoint saves at each processor
+#   - Shutdown persistence when stopping with Ctrl+C
+#
+- route:
+    id: dr-test-route
+    from:
+      uri: timer
+      parameters:
+        period: "3000"
+        timerName: dr-test
+      steps:
+        - setBody:
+            simple:
+              expression: "Message #${exchangeProperty.CamelTimerCounter} at ${date:now:HH:mm:ss}"
+        - log:
+            message: "[Step 1] Received: ${body}"
+        - setHeader:
+            name: processedBy
+            simple:
+              expression: "dr-test-route"
+        - log:
+            message: "[Step 2] Processing: ${body}"
+        - to:
+            uri: direct
+            parameters:
+              name: process
+        - log:
+            message: "[Step 3] Done: ${body}"
+
+- route:
+    id: dr-processor
+    from:
+      uri: direct
+      parameters:
+        name: process
+      steps:
+        - setBody:
+            simple:
+              expression: "Processed: ${body}"
+        - log:
+            message: "[Processor] Output: ${body}"

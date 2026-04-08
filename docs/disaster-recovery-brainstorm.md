@@ -334,6 +334,21 @@ RecoveryStore ──> implemented by backends (Step 3: JDBC)
 RecoveryStoreProvider ──> discovered by ServiceLoader, creates RecoveryStore instances
 ```
 
+### Future Work
+
+#### Integration Tests
+
+Automated integration tests using the Citrus + Camel JBang framework (same as `integration-tests/jdbc` and `integration-tests/jms`). Before automating, the DR module should be validated manually with JBang + Camel routes to confirm real-world behavior.
+
+**Planned test scenarios:**
+- Schema auto-creation with JDBC backend (PostgreSQL via Testcontainers)
+- Checkpoint round-trip (exchange state saved during processing, loadable after)
+- Shutdown drain (in-flight exchanges persisted when route stops)
+- Recovery replay (saved snapshots replayed on restart — requires multi-lifecycle process management)
+- DR disabled (`forage.dr.enabled=false` produces no DR behavior)
+
+**Manual validation first:** Use `camel jbang run` with the DR module on the classpath to exercise the full lifecycle (start route, process messages, stop, restart, verify replay) before encoding these into Citrus tests.
+
 ### Challenges to Watch
 
 - **Async processor wrapping** - `CheckpointProcessor` must extend `DelegateAsyncProcessor` to not break Camel's async engine

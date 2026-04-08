@@ -356,6 +356,18 @@
             <version>${project.version}</version>
         </dependency>
 
+        <!-- Disaster Recovery Modules -->
+        <dependency>
+            <groupId>io.kaoto.forage</groupId>
+            <artifactId>forage-dr-engine</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.kaoto.forage</groupId>
+            <artifactId>forage-dr-store-jdbc</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- Route Policy Modules -->
         <dependency>
             <groupId>io.kaoto.forage</groupId>

@@ -20,12 +20,12 @@ public final class SchemaInitializer {
     private static final Logger LOG = LoggerFactory.getLogger(SchemaInitializer.class);
 
     private static final String CREATE_CHECKPOINT_TABLE = "CREATE TABLE IF NOT EXISTS forage_dr_checkpoint ("
-            + "id BIGINT AUTO_INCREMENT PRIMARY KEY, "
+            + "id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, "
             + "exchange_id VARCHAR(255), "
             + "route_id VARCHAR(255) NOT NULL, "
-            + "body BLOB, "
-            + "headers BLOB, "
-            + "properties BLOB, "
+            + "body BYTEA, "
+            + "headers BYTEA, "
+            + "properties BYTEA, "
             + "snapshot_type VARCHAR(20) NOT NULL, "
             + "created_at BIGINT NOT NULL, "
             + "partial BOOLEAN NOT NULL DEFAULT FALSE"
@@ -38,12 +38,12 @@ public final class SchemaInitializer {
             "CREATE INDEX IF NOT EXISTS idx_dr_checkpoint_created ON forage_dr_checkpoint (created_at)";
 
     private static final String CREATE_SHUTDOWN_TABLE = "CREATE TABLE IF NOT EXISTS forage_dr_shutdown_exchange ("
-            + "id BIGINT AUTO_INCREMENT PRIMARY KEY, "
+            + "id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, "
             + "exchange_id VARCHAR(255), "
             + "route_id VARCHAR(255) NOT NULL, "
-            + "body BLOB, "
-            + "headers BLOB, "
-            + "properties BLOB, "
+            + "body BYTEA, "
+            + "headers BYTEA, "
+            + "properties BYTEA, "
             + "snapshot_type VARCHAR(20) NOT NULL, "
             + "created_at BIGINT NOT NULL, "
             + "partial BOOLEAN NOT NULL DEFAULT FALSE"
