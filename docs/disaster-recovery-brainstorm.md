@@ -123,6 +123,11 @@ The existing Forage infrastructure for these backends can be reused directly.
 | Cluster awareness | Deferred, but keep `camel-cluster-service` in mind |
 | Idempotency | Camel's built-in `IdempotentConsumer` with shared persistent store |
 | Schema management | Auto-create by default + migration scripts for production |
+| Activation model | Zero-config (same as observability: add JAR, everything activates) |
+| Relationship to observability | Independent modules (no dependency between DR and observability) |
+| Snapshot identity | Auto-generated store ID (not exchange ID — exchange IDs are random per-pod) |
+| Snapshot cleanup | TTL-based expiry, purge-on-load (same pattern as Camel IdempotentRepository) |
+| Replay & re-checkpoint | No upsert needed — snapshots are append-only, expired ones are purged |
 
 ### Details
 
@@ -135,6 +140,11 @@ The existing Forage infrastructure for these backends can be reused directly.
 7. **Cluster awareness:** Deferred. Each pod manages its own recovery independently for now. Future work must consider `camel-cluster-service` interactions (leader election, checkpoint ownership, avoiding duplicate replays across pods).
 8. **Idempotency:** Use Camel's built-in `IdempotentConsumer` EIP backed by the same persistent store as the checkpoint store. Replayed exchanges pass through the idempotent consumer - already-completed exchanges are skipped, incomplete ones are reprocessed. At-least-once delivery with dedup = effectively exactly-once from the user's perspective.
 9. **Schema management:** Auto-create on startup by default (zero-config). Ship migration scripts alongside for production environments with restricted DB permissions. Users can disable auto-create via config.
+10. **Activation model:** Zero-config, same philosophy as `camel-observability-services`. Add the JAR + a storage backend, DR activates with all features on. Users who add this dependency know what they're getting. `forage.dr.enabled=true` by default.
+11. **Relationship to observability:** Fully independent. No dependency on `camel-observability-services`. DR logs its own recovery events via SLF4J. The `RecoveryEventNotifier` is a logger, not an OTel bridge. A future optional bridge could be added later if needed.
+12. **Snapshot identity:** Exchange IDs are random UUIDs generated per-pod — they have no business meaning and are not unique across pods or restarts. Snapshots use an auto-generated store ID (BIGINT AUTO_INCREMENT) as PK. The exchange ID is kept as a regular column for logging/debugging only.
+13. **Snapshot cleanup:** TTL-based expiry (default 24h, configurable via `forage.dr.snapshot.ttl.seconds`). Expired snapshots are purged on load — no explicit delete API, no background threads. Same pattern as Camel's `IdempotentRepository` with Redis/Infinispan TTL. This means `RecoveryStore` has only 4 methods: `saveCheckpoint`, `loadCheckpoints`, `saveShutdownExchange`, `loadShutdownExchanges`.
+14. **Replay & re-checkpoint:** Since snapshots are append-only (no PK collision), a replayed exchange that gets re-checkpointed simply creates a new row. Old rows expire via TTL. No upsert logic needed.
 
 ## Implementation Plan
 
@@ -183,6 +193,7 @@ library/disaster-recovery/
 | `forage.dr.shutdown.persistence` | `true` | Enable shutdown drain |
 | `forage.dr.replay.on.startup` | `true` | Replay on restart |
 | `forage.dr.ai.state.check.enabled` | `true` | Warn about in-memory AI providers |
+| `forage.dr.snapshot.ttl.seconds` | `86400` | Snapshot TTL in seconds (default 24h). Expired snapshots purged on load. |
 | `forage.dr.schema.auto.create` | `true` | Auto-create DB schema |
 | `forage.dr.jdbc.datasource.name` | `dataSource` | Registry name of DataSource |
 
@@ -199,23 +210,37 @@ library/disaster-recovery/
 Step 1: Create Maven module structure and POMs
   └─ Directory structure + pom.xml for dr-core, dr-engine, dr-store-jdbc
   └─ Wire into library/pom.xml
-  └─ Status: [ ]
+  └─ Status: [x] Done
 
 Step 2: Implement forage-dr-core (blocked by Step 1)
-  └─ RecoveryStore interface, ExchangeSnapshot, serializer, config classes
-  └─ Status: [ ]
+  └─ 2.1 RecoveryStore interface (6 methods: save/load/delete for checkpoints and shutdown exchanges)
+  └─ 2.2 RecoveryStoreProvider (extends BeanProvider<RecoveryStore>, ServiceLoader-discovered)
+  └─ 2.3 SnapshotType enum (CHECKPOINT, SHUTDOWN) + ExchangeSnapshot POJO (8 fields)
+  └─ 2.4 ExchangeSnapshotSerializer (Exchange <-> ExchangeSnapshot, handles non-serializable gracefully)
+  └─ 2.5 RecoveryConfigEntries + RecoveryConfig (8 config properties, two-class pattern)
+  └─ Status: [x] Done
 
 Step 3: Implement forage-dr-store-jdbc (blocked by Step 2)
-  └─ JdbcRecoveryStore, SchemaInitializer, migration scripts
-  └─ Status: [ ]
+  └─ 3.1 JdbcRecoveryStore (RecoveryStore impl, plain JDBC, takes DataSource in constructor)
+  └─ 3.2 SchemaInitializer (auto-creates tables) + V1__create_dr_tables.sql migration script
+  └─ 3.3 JdbcRecoveryStoreProvider (@ForageBean, setDataSource() + create(), schema init inside create())
+  └─ 3.3 META-INF/services registration for RecoveryStoreProvider
+  └─ Status: [x] Done
 
 Step 4: Implement ShutdownPersistenceRoutePolicyFactory (blocked by Step 2)
-  └─ RoutePolicyFactory + RoutePolicy for graceful shutdown drain
-  └─ Status: [ ]
+  └─ 4.1 ShutdownPersistenceRoutePolicy (extends RoutePolicySupport, tracks in-flight via ConcurrentHashMap)
+  └─ 4.2 ShutdownPersistenceRoutePolicyFactory (creates one policy per route)
+  └─ Design: onExchangeBegin tracks, onExchangeDone removes, onStop drains to store
+  └─ No SIGTERM hooks needed — Camel lifecycle calls onStop() on shutdown
+  └─ Status: [x] Done
 
 Step 5: Implement CheckpointInterceptStrategy (blocked by Step 2)
-  └─ InterceptStrategy + DelegateAsyncProcessor for exchange checkpointing
-  └─ Status: [ ]
+  └─ 5.1 CheckpointProcessor (extends DelegateAsyncProcessor, snapshots before delegation)
+  └─ 5.2 CheckpointInterceptStrategy (wraps every processor with CheckpointProcessor)
+  └─ Design: DelegateAsyncProcessor preserves Camel's async engine
+  └─ Checkpoint failure doesn't break processing (try/catch, log warning, continue)
+  └─ Snapshots before delegation, not after (captures state before pod could die mid-processing)
+  └─ Status: [x] Done
 
 Step 6: Implement RecoveryReplayService + AiStateRecoveryAdvisor (blocked by Step 2)
   └─ Startup replay, AI provider warnings, event notifier stub
@@ -227,6 +252,38 @@ Step 7: Implement DisasterRecoveryBeanFactory (blocked by Steps 3-6)
 ```
 
 Steps 3, 4, 5, and 6 can be done in parallel once Step 2 is complete. Step 7 ties everything together at the end.
+
+### Class Descriptions (forage-dr-core — Step 2)
+
+All classes live in package `io.kaoto.forage.dr.core`.
+
+#### RecoveryStore (interface)
+Storage SPI — the contract any backend (JDBC, Redis, Infinispan) must implement. Only 4 methods:
+- `saveCheckpoint` / `loadCheckpoints` — used by CheckpointInterceptStrategy (Step 5) and RecoveryReplayService (Step 6)
+- `saveShutdownExchange` / `loadShutdownExchanges` — used by ShutdownPersistenceRoutePolicy (Step 4) and replay on startup
+- No delete methods — snapshots expire via TTL, purged on load
+- Lives in dr-core so backends depend only on this, not on the engine
+
+#### RecoveryStoreProvider (interface)
+Extends `BeanProvider<RecoveryStore>` — ServiceLoader discovery mechanism. The store is the *thing*, the provider is the *factory that creates it*. Standard Forage pattern (like ModelProvider, DataSourceProvider).
+
+#### ExchangeSnapshot (POJO)
+Serializable representation of a Camel Exchange at a point in time. Fields: id (auto-generated by store, BIGINT), exchangeId (kept for logging/debugging only — not PK), routeId, body (byte[]), headers (Map), properties (Map), snapshotType (CHECKPOINT|SHUTDOWN), timestamp, partial (boolean). Needed because Camel's Exchange is a runtime object tied to the context and can't be serialized directly.
+
+#### ExchangeSnapshotSerializer
+Converts between live Camel Exchange and ExchangeSnapshot. Handles non-serializable objects gracefully (skips with warnings, marks snapshot as partial). Kept separate from both POJO and store for clean separation.
+
+#### RecoveryConfigEntries + RecoveryConfig
+Standard Forage two-class config pattern. Controls 9 DR properties (enabled, storage backend, checkpoint on/off, shutdown persistence, replay on startup, AI state check, snapshot TTL in seconds (default 24h), schema auto-create, JDBC datasource name). Read by engine classes in Steps 4-7.
+
+#### Dependency flow
+```
+RecoveryConfig ──> used by engine (Steps 4-7) to check settings
+ExchangeSnapshot ──> stored/loaded by RecoveryStore
+ExchangeSnapshotSerializer ──> used by engine to convert Exchange <-> ExchangeSnapshot
+RecoveryStore ──> implemented by backends (Step 3: JDBC)
+RecoveryStoreProvider ──> discovered by ServiceLoader, creates RecoveryStore instances
+```
 
 ### Challenges to Watch
 
