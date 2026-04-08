@@ -100,6 +100,55 @@ Swap in-memory repositories for persistent ones:
 
 Persist SAGA compensation actions so a new pod can complete or roll back interrupted long-running transactions. SAGA configuration is route-level, so the same constraints as 2a apply.
 
+#### 2c. Human-in-the-Loop (HITL) pause/resume
+
+Enable a Camel route to **pause mid-route**, persist its state, wait for an external human decision (via webhook callback), and **resume from exactly where it stopped**.
+
+**Architecture: follow the IdempotentRepository pattern.**
+
+HITL should be a **Camel-level feature**, not Forage-specific. The same pattern Camel uses for `IdempotentRepository` applies here: Camel core defines the SPI, each `camel-*` module ships its own storage backend.
+
+```
+Camel core (or new component):  HitlRepository / DurableClaimCheckRepository (interface)
+                                └── MemoryHitlRepository (default, for dev/testing)
+
+camel-jdbc:          JdbcHitlRepository
+camel-infinispan:    InfinispanHitlRepository
+camel-kafka:         KafkaHitlRepository (correlation via topic/key)
+camel-redis:         RedisHitlRepository (with TTL natively)
+```
+
+**Forage's role:** auto-wire only. Detect the DataSource/Redis/Infinispan already in the Camel registry, create the appropriate repository, and register it. This is exactly what Forage does today for other components — it doesn't create new Camel components, it wires existing ones with zero-config.
+
+**Proposed usage — Claim Check + Webhook callback:**
+
+```
+from("direct:ai-workflow")
+    .to("langchain4j-agent:draft")
+    .claimCheck(ClaimCheckOperation.Push)    // persist exchange via durable repository
+    // claim key returned, route processing stops
+    // exchange is durably stored
+
+// Webhook callback route (human submits decision)
+from("platform-http:/hitl/callback/{claimKey}")
+    .claimCheck(ClaimCheckOperation.Pop, header("claimKey"))  // restore exchange
+    .choice()
+        .when(header("reviewStatus").isEqualTo("NEEDS_REVISION"))
+            .to("langchain4j-agent:revise")
+        .otherwise()
+            .to("smtp:send-newsletter")
+```
+
+**Why webhooks for the callback:**
+
+- No Kafka/messaging dependency — just HTTP
+- Correlation ID is in the URL itself (`/callback/{claimKey}`)
+- Firewall-friendly — external system calls back to Camel
+- Camel's `platform-http` exposes endpoints with zero extra dependencies
+- If the pod dies while waiting, the exchange is already persisted — new pod re-exposes the callback
+
+**Note:** The `camel-webhook` component was considered but it serves a different purpose — it auto-registers/deregisters webhooks with external services (GitHub, Telegram). For HITL, we need the opposite: expose a callback URL for humans to call.
+
 ## Storage Backend
 
 Following Forage's existing patterns (`ConfigEntries` + `AbstractConfig`), the recovery store would support multiple backends:
